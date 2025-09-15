@@ -1,20 +1,24 @@
 require('dotenv').config();
-
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const express = require('express');
 const connectDB = require('./config/db');
 
 const User = require('./models/user');
 const Reservations = require('./models/Reservations');
+const auth = require('./middleware/authorizations');
 
 const PORT = process.env.PORT || 3000;
 
 const app = express();
-
-// Middleware para JSON
-app.use(express.json());
-
 // Conectar a MongoDB
 connectDB();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
 
 /* -------------------- Rutas de Reservations -------------------- */
 
@@ -49,6 +53,26 @@ app.post('/reservations', async (req, res) => {
     }
 });
 
+// PUT actualizar estado de reserva
+app.put('/reservations/:id', async (req, res) => {
+    try {
+        const { Titular, FechaInicio, FechaTermino, Destinations, CantidadPersonas, price, Estado } = req.body;
+        const updatedReservation = await Reservations.findByIdAndUpdate(
+            req.params.id,  
+            { Titular, FechaInicio, FechaTermino, Destinations, CantidadPersonas, price, Estado },
+            { new: true, runValidators: true } 
+        );
+        if (!updatedReservation) {
+            return res.status(404).json({ message: 'Reserva no encontrada' });
+        }
+        return res.status(200).json({ reservationActualiza: updatedReservation });
+    } catch (error) {
+        return res.status(500).json({ message: 'Error al actualizar la reserva', error: error.message });   
+    }
+});
+
+
+
 /* -------------------- Rutas de Users -------------------- */
 
 // GET todos los usuarios
@@ -61,28 +85,48 @@ app.get('/users', async (req, res) => {
     }
 });
 
-// POST nuevo usuario
-app.post('/users', async (req, res) => {
+// POST Crear nuevo usuario con password hasheada // inicio de sesión
+app.post('/users/create', async (req, res) => {
+    const { nombre, email, password } = req.body;
     try {
-        const { nombre, email, password } = req.body;
-
-        // Validación primero
-        if (!nombre || !email || !password) {
-            return res.status(400).json({ message: "Todos los campos son obligatorios" });
-        }
-
-        // Crear el usuario una sola vez
-        const newUser = await User.create({ nombre, email, password });
-
-        return res.status(201).json({ user: newUser });
-    } catch (error) {
-        console.error(" Error en POST /users:", error);
+        let foundUser = await User.findOne({ email });
+        if (foundUser) return res.status(400).json({ message: "Usuario ya existe" });
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const response = await User.create({ nombre, email, password: hashedPassword });
+        if (newUser) return res.status(400).json({ message: "Usuario ya existe" });
+        return res.status(201).json({ datos: newUser });
+    } catch (error) {   
         return res.status(500).json({ message: "Error al crear usuario", error: error.message });
     }
 });
+
+app.post('/users/login', async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const foundUser = await User.findOne({ email });
+        if (!foundUser) return res.status(400).json({ message: "Credenciales inválidas" });
+        const correctPassword = await bcrypt.compare(password, foundUser.password);
+        if (!correctPassword) return res.status(400).json({ message: "Credenciales inválidas" });
+        const payload = { id: foundUser._id, nombre: foundUser.nombre };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '2h' });
+        return res.status(200).json({ token });
+    } catch (error) {
+        return res.status(500).json({ message: "Error al iniciar sesión", error: error.message });
+    }
 
 
 /* -------------------- Iniciar servidor -------------------- */
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en el puerto: ${PORT}`);
-});
+})});
+
+
+app.get('users/verify', auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select("-password")
+        res.json({usuario: user});
+    } catch (error) {
+        res.status(500).json 
+    }
+}) 
